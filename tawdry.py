@@ -159,9 +159,9 @@ class TypingMeta(type):
         print(parameters)
         if parameters:
             self.__param__, *_ = parameters
-            return self()
+            return self
 
-        return self()
+        return self
 
     def __instancecheck__(self, obj):
         if self.__param__ and isinstance(obj, self.__param__):
