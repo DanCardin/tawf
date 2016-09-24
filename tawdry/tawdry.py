@@ -1,13 +1,13 @@
 import collections.abc
-import functools
 import inspect
 import re
-import types
 import typing
 import wsgiref.simple_server
 
 import webob
 import webob.exc
+
+from . import responses
 
 
 def generate_sitemap(sitemap: typing.Mapping, prefix: list=None):
@@ -102,6 +102,7 @@ def get_route_response(sitemap, route_template, request):
     url_context = {}
     sitemap_context = sitemap
     for segment in route_template:
+        keyword = None
         if segment.startswith('{') and segment.endswith('}'):
             keyword = segment[1:-1]
             url_context[keyword] = request.urlvars[keyword]
@@ -120,7 +121,8 @@ def get_route_response(sitemap, route_template, request):
             url_context = map_params(param_mappings, url_context)
             response = resource_callable(request, **url_context)
 
-            url_context[keyword] = response
+            if keyword:
+                url_context[keyword] = response
     return response
 
 
@@ -132,86 +134,28 @@ def get_callable_return_type(callable):
     return signature.return_annotation
 
 
-def make_route_response(sitemap, route_template, callable):
-    def replacement(env, start_response):
-        request = webob.Request(env)
-        try:
-            response = get_route_response(sitemap, route_template, request)
-        except webob.exc.HTTPException as e:
-            response = e
-
-        if not isinstance(response, webob.exc.HTTPException):
-            return_type = get_callable_return_type(callable)
-            if return_type is None:
-                return_type = Response
-            print(return_type)
-            response = return_type(response)
-        return response(env, start_response)
-    return replacement
-
-
-class TypingMeta(type):
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def __new__(cls, name, bases, namespace, *parameters):
-        self = super().__new__(cls, name, bases, namespace)
-        print(parameters)
-        if parameters:
-            self.__param__, *_ = parameters
-            return self()
-
-        return self()
-
-    def __instancecheck__(self, obj):
-        if self.__param__ and isinstance(obj, self.__param__):
-            return True
-        return False
-
-    @functools.lru_cache(typed=True)
-    def __getitem__(self, *params):
-        assert len(params) == 1
-        return self.__class__(
-            self.__name__,
-            self.__bases__,
-            dict(self.__dict__),
-            *params,
-        )
-
-    def __repr__(self):
-        return '{}[{}]'.format(super().__repr__(), self.__param__)
-
-
-# class Response(metaclass=TypingMeta):
-class Response(metaclass=TypingMeta):
-    def __call__(self, response):
-        response = str(response)
-        response = webob.Response(body=response)
-        response.headers.add('Content-type', 'text/html')
-        return response
-
-
-class JsonResponse(Response):
-    __param__ = type(None)
-
-    def __call__(self, response):
-        pass
-        # response = webob.Response(body=response)
-        # response.headers.set('Content-type', 'text/html')
-        # print('creating', *args, self.__param__)
-
-    def __getitem__(self, *params):
-        assert len(params) == 2
-        return self.__class__(
-            type(self).__name__,
-            type(self).__bases__,
-            dict(type(self).__dict__),
-            *params,
-        )
-
+def inject_wsgi_types(request_type, response_type, base_exc_type):
+    def make_route_response(sitemap, route_template, callable, response_type=responses.Response):
+        def replacement(env, start_response):
+            request = request_type(env)
+            try:
+                response = get_route_response(sitemap, route_template, request)
+            except base_exc_type as e:
+                response = e
+            else:
+                response_converter_type = get_callable_return_type(callable)
+                response_converter = response_converter_type(response)
+                response = response_converter.get()
+            return response(env, start_response)
+        return replacement
+    return make_route_response
 
 
 class Tawdry():
+    request_type = webob.Request
+    response_type = webob.Response
+    base_exc_type = webob.exc.HttpException
+
     def __init__(self, sitemap, prefix=''):
         """
 
@@ -223,6 +167,11 @@ class Tawdry():
                 but if any other string is passed, it should generally begin with
                 a '/'.
         """
+        make_route_response = inject_wsgi_types(
+            self.request_type,
+            self.response_type,
+            self.base_exc_type,
+        )
         generated_sitemap = generate_sitemap(sitemap, [prefix])
 
         self._routes = []
@@ -232,7 +181,7 @@ class Tawdry():
             self._routes.append((compiled_route, controller))
 
     def __call__(self, env, start_response):
-        request = webob.Request(env)
+        request = self.request(env)
         for regex, controller in self._routes:
             match = re.match(regex, request.path_info)
             if match:
@@ -249,36 +198,3 @@ def serve(sitemap, make_server=wsgiref.simple_server.make_server, host='127.0.0.
         httpd.serve_forever()
     except KeyboardInterrupt:
         print('^C')
-
-
-if __name__ == '__main__':
-    def publisher(request, publisher_id: int):
-        return {'name': 'Mad Hat'}
-
-    def author(request, publisher_id, author_id) -> JsonResponse[list]:
-        return {'name': 'Sonny Jim', 'pubname': publisher_id['name']}
-
-    def book(request, publisher_id, author_id, book_id) -> JsonResponse[list]:
-        return {'name': author_id['name'] + ' - The Book'}
-
-    author_sitemap = {
-        'author': {
-            '{author_id}': {
-                '': author,
-                'book': {
-                    '{book_id}': book,
-                },
-            },
-        },
-    }
-
-    sitemap = {
-        'publisher': {
-            '{publisher_id}': {
-                '': publisher,
-                **author_sitemap,
-            },
-        },
-    }
-
-    serve(sitemap, port=6001)
