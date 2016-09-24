@@ -159,7 +159,7 @@ class Tawdry():
     response_type = webob.Response
     base_exc_type = webob.exc.HTTPException
 
-    def __init__(self, sitemap, prefix=''):
+    def __init__(self, sitemap=None, prefix=''):
         """
 
         Args:
@@ -170,6 +170,9 @@ class Tawdry():
                 but if any other string is passed, it should generally begin with
                 a '/'.
         """
+        if sitemap is None:
+            sitemap = {}
+
         make_route_response = inject_wsgi_types(
             self.request_type,
             self.response_type,
@@ -192,12 +195,10 @@ class Tawdry():
                 return controller(env, start_response)
         return webob.exc.HTTPNotFound()(env, start_response)
 
-
-def serve(sitemap, make_server=wsgiref.simple_server.make_server, host='127.0.0.1', port=5000):
-    app = Tawdry(sitemap)
-    httpd = make_server(host, port, app)
-    print('Serving on http://{host}:{port}'.format(host=host, port=port))
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print('^C')
+    def serve(self, make_server=wsgiref.simple_server.make_server, host='127.0.0.1', port=5000):
+        httpd = make_server(host, port, self)
+        print('Serving on http://{host}:{port}'.format(host=host, port=port))
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print('^C')

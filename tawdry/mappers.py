@@ -9,7 +9,6 @@ class TypingMeta(type):
 
     def __new__(cls, name, bases, namespace, *parameters):
         self = super().__new__(cls, name, bases, namespace)
-        print(parameters)
         if parameters:
             self.__param__, *_ = parameters
             return self
